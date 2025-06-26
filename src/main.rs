@@ -6,7 +6,8 @@ use tokio::{sync::Mutex, time::sleep};
 
 #[derive(Debug, Default, Clone)]
 struct AppState {
-    quee: Arc<Mutex<Executable>>,
+    current_exe: Arc<Mutex<Option<Executable>>>,
+    depencies: Arc<Mutex<Vec<Executable>>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -18,7 +19,10 @@ struct Executable {
 #[derive(Parser, Debug)]
 struct FlashClientArg {
     #[arg(short, long)]
-    executables: Vec<String>,
+    executables: String,
+
+    #[arg(short, long)]
+    dependecies: Option<Vec<String>>,
 
     #[arg(short, long)]
     out: String,
@@ -32,12 +36,12 @@ async fn main() {
     println!("{:?}", args.executables);
 
     loop {
-        get_build_status(&state).await;
+        get_build_status(&state, &args).await;
         sleep(Duration::from_secs(2)).await;
     }
 }
 
-async fn get_build_status(state: &AppState) {
+async fn get_build_status(state: &AppState, args: &FlashClientArg) {
     let res = reqwest::get("http://localhost:4090/executables")
         .await
         .unwrap();
@@ -50,7 +54,7 @@ async fn get_build_status(state: &AppState) {
         }
     };
 
-    let executables = match from_str::<Vec<Executable>>(&data) {
+    let avalible_exes = match from_str::<Vec<Executable>>(&data) {
         Ok(exe) => exe,
         Err(err) => {
             eprintln!("Error parsing JSON: {}", err);
@@ -58,7 +62,37 @@ async fn get_build_status(state: &AppState) {
         }
     };
 
-    println!("{:?}", executables)
+    for exe in avalible_exes {
+        if args.executables.eq(&exe.name) {
+            // executavel princiapal encontrado!
+            let current_exe = &mut *state.current_exe.lock().await;
+
+            match current_exe {
+                Some(current_exe) => {
+                    if current_exe.hash != exe.hash {
+                        current_exe.hash = exe.hash;
+                        current_exe.name = exe.name;
+                    }
+                }
+                None => {
+                    current_exe.replace(Executable {
+                        name: exe.name.clone(),
+                        hash: exe.hash,
+                    });
+                }
+            }
+
+            continue;
+        }
+
+        if let Some(depencies) = &args.dependecies {
+            if depencies.contains(&exe.name) {
+                let current_depencies = state.depencies.lock().await;
+            }
+        }
+    }
+
+    // println!("{:?}", avalible_exes)
 }
 
 async fn run_exe() {}
