@@ -1,13 +1,25 @@
 use clap::Parser;
 use serde::Deserialize;
-use serde_json::from_str;
-use std::{sync::Arc, time::Duration};
-use tokio::{sync::Mutex, time::sleep};
+use std::{process::Command, sync::Arc, time::Duration};
+use tokio::{sync::Mutex, task, time::sleep};
+
+use crate::{download_exe::download_exe, update_exes::update_exes};
+
+mod download_exe;
+mod update_exes;
 
 #[derive(Debug, Default, Clone)]
 struct AppState {
     current_exe: Arc<Mutex<Option<Executable>>>,
-    depencies: Arc<Mutex<Vec<Executable>>>,
+    dependencies: Arc<Mutex<Vec<Executable>>>,
+    download_state: Arc<Mutex<DownloadState>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum DownloadState {
+    #[default]
+    Progress,
+    Completed,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -22,7 +34,7 @@ struct FlashClientArg {
     executables: String,
 
     #[arg(short, long)]
-    dependecies: Option<Vec<String>>,
+    dependencies: Option<Vec<String>>,
 
     #[arg(short, long)]
     out: String,
@@ -33,68 +45,40 @@ async fn main() {
     let state = AppState::default();
     let args = FlashClientArg::parse();
 
-    println!("{:?}", args.executables);
-
     loop {
-        get_build_status(&state, &args).await;
+        let exes_to_update = update_exes(&state, &args).await;
+        download_exe(&state, &args, &exes_to_update).await;
+
         sleep(Duration::from_secs(2)).await;
+
+        println!("update: {:?}", exes_to_update);
+        println!("exe: {:?}", state.current_exe.lock().await);
+        println!("dep: {:?}", state.dependencies.lock().await);
     }
 }
 
-async fn get_build_status(state: &AppState, args: &FlashClientArg) {
-    let res = reqwest::get("http://localhost:4090/executables")
+async fn run_exe(state: AppState, dir: String, exe_name: String) {
+    tokio::spawn(async move {
+        loop {
+            // if *state.download_state.lock().await != DownloadState::Completed {
+            //     return;
+            // }
+        }
+
+        let output = task::spawn_blocking(move || {
+            Command::new("chmod")
+                .arg("+x")
+                .arg(format!("{}/{}", dir, exe_name))
+                .output()
+                .expect("Não foi possível executar o programa")
+        })
         .await
-        .unwrap();
+        .expect("falha na task que lida com a execução");
 
-    let data = match res.text().await {
-        Ok(data) => data,
-        Err(err) => {
-            eprintln!("Error fetching data: {}", err);
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("Erro no build: {}", stderr);
             return;
         }
-    };
-
-    let avalible_exes = match from_str::<Vec<Executable>>(&data) {
-        Ok(exe) => exe,
-        Err(err) => {
-            eprintln!("Error parsing JSON: {}", err);
-            return;
-        }
-    };
-
-    for exe in avalible_exes {
-        if args.executables.eq(&exe.name) {
-            // executavel princiapal encontrado!
-            let current_exe = &mut *state.current_exe.lock().await;
-
-            match current_exe {
-                Some(current_exe) => {
-                    if current_exe.hash != exe.hash {
-                        current_exe.hash = exe.hash;
-                        current_exe.name = exe.name;
-                    }
-                }
-                None => {
-                    current_exe.replace(Executable {
-                        name: exe.name.clone(),
-                        hash: exe.hash,
-                    });
-                }
-            }
-
-            continue;
-        }
-
-        if let Some(depencies) = &args.dependecies {
-            if depencies.contains(&exe.name) {
-                let current_depencies = state.depencies.lock().await;
-            }
-        }
-    }
-
-    // println!("{:?}", avalible_exes)
+    });
 }
-
-async fn run_exe() {}
-
-async fn append_run_quee(state: AppState) {}
