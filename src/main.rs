@@ -55,6 +55,9 @@ async fn main() {
     let mut _join: Option<JoinHandle<()>> = None;
 
     let mut exe_thread = ExecutionThread::new(state.running_state.clone(), args.clone());
+    let flash_addr = std::env::var("FLASH_ADDR").unwrap_or_else(|_| "localhost:4090".to_string());
+
+    println!("server listener on: {}", flash_addr);
 
     loop {
         let exes_to_update = update_exes(&state, &args).await;
