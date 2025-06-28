@@ -3,7 +3,9 @@ use serde_json::from_str;
 use crate::{AppState, Executable, FlashClientArg};
 
 async fn request_available_exes() -> Vec<Executable> {
-    let res = reqwest::get("http://0.0.0.0:4090/executables")
+    let flash_addr = std::env::var("FLASH_ADDR").unwrap_or_else(|_| "localhost:4090".to_string());
+
+    let res = reqwest::get(format!("http://{}/executables", flash_addr))
         .await
         .unwrap();
 

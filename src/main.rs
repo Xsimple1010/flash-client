@@ -47,6 +47,8 @@ struct FlashClientArg {
 
 #[tokio::main]
 async fn main() {
+    dotenv::dotenv().ok();
+
     let state = AppState::default();
     let args = FlashClientArg::parse();
 
