@@ -3,7 +3,7 @@ use serde_json::from_str;
 use crate::{AppState, Executable, FlashClientArg};
 
 async fn request_available_exes() -> Vec<Executable> {
-    let res = reqwest::get("http://localhost:4090/executables")
+    let res = reqwest::get("http://0.0.0.0:4090/executables")
         .await
         .unwrap();
 

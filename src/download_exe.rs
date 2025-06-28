@@ -12,7 +12,7 @@ pub async fn download_exe(state: &AppState, args: &FlashClientArg, files: &Vec<S
     *running_state = RunninState::Downloading;
 
     for file in files {
-        let res = reqwest::get(format!("http://localhost:4090/executable/{}", file))
+        let res = reqwest::get(format!("http://0.0.0.0:4090/executable/{}", file))
             .await
             .unwrap();
 
