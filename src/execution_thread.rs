@@ -1,47 +1,67 @@
 use std::{
     process::Command,
     sync::{Arc, RwLock},
-    thread::{self, sleep},
+    thread::{self, JoinHandle, sleep},
     time::Duration,
 };
 
-use tokio::sync::Mutex;
-
-use crate::{FlashClientArg, RunninState};
+use crate::FlashClientArg;
 
 pub struct ExecutionThread {
-    thread_is_running: Arc<RwLock<bool>>,
-    running_state: Arc<Mutex<RunninState>>,
+    pub thread_is_running: Arc<RwLock<bool>>,
     args: FlashClientArg,
+    join_handle: Option<JoinHandle<()>>,
 }
 
 impl Drop for ExecutionThread {
     fn drop(&mut self) {
+        // Definir thread_is_running como false
         match self.thread_is_running.write() {
-            Ok(mut running) => {
-                *running = false;
+            Ok(mut running) => *running = false,
+            Err(op) => *op.into_inner() = false,
+        }
+
+        // Tentar juntar a thread, se ela existir
+        if let Some(handle) = self.join_handle.take() {
+            let mut retry_count = 0;
+            const MAX_RETRIES: u32 = 5;
+
+            while retry_count < MAX_RETRIES {
+                if handle.is_finished() {
+                    println!("Thread stopped successfully.");
+                    return;
+                }
+                sleep(Duration::from_secs(1));
+                retry_count += 1;
             }
-            Err(op) => {
-                let mut running = op.into_inner();
-                *running = false;
+
+            // Tentar juntar a thread
+            match handle.join() {
+                Ok(_) => println!("Thread stopped successfully after join."),
+                Err(_) => eprintln!(
+                    "Thread panicked or failed to stop after {} retries.",
+                    MAX_RETRIES
+                ),
             }
+        } else {
+            println!("No thread to stop.");
         }
     }
 }
 
 impl ExecutionThread {
-    pub fn new(running_state: Arc<Mutex<RunninState>>, args: FlashClientArg) -> Self {
+    pub fn new(args: FlashClientArg) -> Self {
         Self {
             thread_is_running: Arc::new(RwLock::new(false)),
-            running_state,
             args,
+            join_handle: None,
         }
     }
 
-    fn set_permission(&self) -> bool {
+    async fn set_permission(&self, exe_name: &String) -> bool {
         let output = Command::new("chmod")
             .arg("+x")
-            .arg(format!("{}/{}", self.args.out, self.args.executables))
+            .arg(format!("{}/{}", self.args.out, exe_name))
             .output()
             .expect("Não foi possível executar o programa");
 
@@ -50,79 +70,91 @@ impl ExecutionThread {
             eprintln!("Erro no build: {}", stderr);
             return false;
         }
-
         true
     }
 
-    pub async fn start(&mut self) {
-        let mut state = {
-            let d = &*self.running_state.lock().await;
-            d.clone()
+    pub async fn start(&mut self, exe_name: String) {
+        let state = {
+            self.thread_is_running
+                .read()
+                .expect("Failed to acquire read lock")
+                .clone()
         };
 
-        if state == RunninState::Running {
+        if state {
             return;
         }
 
-        // permissão para executar o programa
-        if state == RunninState::Downloaded {
-            if self.set_permission() {
-                {
-                    let n_state = &mut *self.running_state.lock().await;
-                    *n_state = RunninState::HasPermission;
-
-                    state = n_state.clone();
-                }
-            }
+        // Definir permissões, se necessário
+        if !self.set_permission(&exe_name).await {
+            eprintln!("Failed to set permissions for {}", exe_name);
+            return;
         }
 
-        if state == RunninState::HasPermission {
-            {
-                let mut thread_is_running = self.thread_is_running.write().expect("msg");
-                *thread_is_running = true;
-            }
+        {
+            *self
+                .thread_is_running
+                .write()
+                .expect("Failed to acquire write lock") = true;
+        }
 
-            self.thread_handle().await;
+        self.thread_handle(exe_name).await;
+    }
+
+    pub async fn stop(&mut self) {
+        {
+            *self
+                .thread_is_running
+                .write()
+                .expect("Failed to acquire write lock") = false
+        }
+
+        sleep(Duration::from_secs(1));
+        // Tentar juntar a thread, se ela existir
+        if let Some(handle) = self.join_handle.take() {
+            match handle.join() {
+                Ok(_) => println!("Thread stopped successfully."),
+                Err(_) => eprintln!("Thread panicked or failed to stop."),
+            }
         }
     }
 
-    pub async fn stop(&self) {
-        let mut thread_is_running = self.thread_is_running.write().expect("msg");
-        *thread_is_running = false;
-
-        sleep(Duration::from_secs(3));
-    }
-
-    async fn thread_handle(&mut self) {
+    async fn thread_handle(&mut self, exe_name: String) {
         let thread_is_running = self.thread_is_running.clone();
-        let executables = self.args.executables.clone();
         let out = self.args.out.clone();
 
-        thread::spawn(move || {
-            let mut output = Command::new(format!("{}/{}", out, executables))
+        let handle = thread::spawn(move || {
+            println!(
+                "Iniciando thread para executar o programa: {}",
+                format!("{}/{}", out, exe_name)
+            );
+            let mut output = Command::new("./bin/obdir")
                 .spawn()
                 .expect("Não foi possível executar o programa");
 
             loop {
-                match thread_is_running.read() {
-                    Ok(is_running) => {
-                        if !*is_running {
-                            break;
-                        }
-                    }
-                    Err(op) => {
-                        let mut _is_running = *op.into_inner();
-                        _is_running = false;
+                if let Ok(is_running) = thread_is_running.read() {
+                    if !*is_running {
                         break;
                     }
-                };
+                } else {
+                    break;
+                }
+
+                // Verificar se o processo terminou naturalmente
+                if let Ok(Some(_)) = output.try_wait() {
+                    break;
+                }
 
                 sleep(Duration::from_secs(1));
             }
 
-            output.kill().expect("Não foi possível matar o processo");
+            // Tentar encerrar o processo
+            let _ = output.kill();
+            let _ = output.wait(); // Garantir que o processo foi finalizado
         });
 
-        *self.running_state.lock().await = RunninState::Running;
+        // Armazenar o JoinHandle
+        self.join_handle = Some(handle);
     }
 }
