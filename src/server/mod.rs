@@ -28,7 +28,7 @@ pub async fn init_server(state: AppState) {
         .with_state(state)
         .layer(DefaultBodyLimit::max(600 * 1024 * 1024)); // Limite de 600MB por upload
 
-    let addr = format!("localhost:{}", flash_port);
+    let addr = format!("0.0.0.0:{}", flash_port);
 
     let tcp_listener = TcpListener::bind(addr).await.unwrap();
 
