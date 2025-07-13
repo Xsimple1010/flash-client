@@ -109,7 +109,6 @@ impl ExecutionThread {
                 .expect("Failed to acquire write lock") = false
         }
 
-        sleep(Duration::from_secs(1));
         // Tentar juntar a thread, se ela existir
         if let Some(handle) = self.join_handle.take() {
             match handle.join() {
@@ -122,13 +121,11 @@ impl ExecutionThread {
     async fn thread_handle(&mut self, exe_name: String) {
         let thread_is_running = self.thread_is_running.clone();
         let out = self.args.out.clone();
+        let path = format!("{}/{}", out, exe_name);
 
         let handle = thread::spawn(move || {
-            println!(
-                "Iniciando thread para executar o programa: {}",
-                format!("{}/{}", out, exe_name)
-            );
-            let mut output = Command::new("./bin/obdir")
+            println!("Iniciando thread para executar o programa: {}", path);
+            let mut output = Command::new(&path)
                 .spawn()
                 .expect("Não foi possível executar o programa");
 
